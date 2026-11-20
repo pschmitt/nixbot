@@ -15,10 +15,14 @@ import pytest
 from nixbot.builders import (
     BUILDERS_FILE_ENV,
     EVALUATORS_ENV,
+    POOL_STATE_FILE_ENV,
     STATIC_BUILDERS_FILE_ENV,
+    BuildersSource,
     classify,
     evaluators,
     parse_builders,
+    parse_pool_state,
+    pool_workers,
 )
 from nixbot.executor import (
     LogWriter,
@@ -28,7 +32,13 @@ from nixbot.executor import (
     short_host,
 )
 from nixbot.web.logs import LogRegistry
-from nixbot.web.templating import build_hosts, live_build_text, live_build_title
+from nixbot.web.templating import (
+    build_hosts,
+    display_host,
+    host_counts,
+    live_build_text,
+    live_build_title,
+)
 
 from .e2e.support import seed
 from .support import WebHarness, web_harness
@@ -38,6 +48,19 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 REMOTE = "ssh-ng://nix-remote-builder@rofl-15.brkn.lol"
+
+POOL_STATE = {
+    "nixbot-worker-eb791d5d": {
+        "id": "c09e984e",
+        "created": 1000.0,
+        "ready": True,
+        "lastBusy": 2000.0,
+        "ip": "100.65.47.26",
+        "ips": {"netbird": "100.122.3.4", "tailscale": "100.65.47.26"},
+        "state": "idle",
+        "somethingNew": {"nested": [1, 2]},
+    },
+}
 
 
 def _start(cap: StructuredCapture, act: int, drv: str, machine: str) -> None:
@@ -155,6 +178,65 @@ def test_evaluators(monkeypatch: pytest.MonkeyPatch) -> None:
     assert evaluators() == []
 
 
+def test_parse_pool_state_is_tolerant() -> None:
+    workers = parse_pool_state(POOL_STATE)
+    assert set(workers) == {"100.65.47.26", "100.122.3.4"}
+    worker = workers["100.122.3.4"]
+    assert worker.name == "nixbot-worker-eb791d5d"
+    assert worker.state == "idle"
+    assert (worker.created, worker.last_busy) == (1000.0, 2000.0)
+    # Malformed or partial entries never break the page.
+    assert parse_pool_state(None) == {}
+    assert parse_pool_state([1, 2]) == {}
+    assert parse_pool_state({"w": "oops", 3: {}}) == {}
+    partial = parse_pool_state({"w": {"ip": "10.0.0.1", "created": "soon"}})
+    assert partial["10.0.0.1"].name == "w"
+    assert partial["10.0.0.1"].created is None
+    assert partial["10.0.0.1"].state is None
+
+
+def test_pool_worker_names(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.delenv(POOL_STATE_FILE_ENV, raising=False)
+    assert pool_workers() == {}
+    assert display_host("100.122.3.4") == "100.122.3.4"
+    state = tmp_path / "state.json"
+    state.write_text(json.dumps(POOL_STATE))
+    monkeypatch.setenv(POOL_STATE_FILE_ENV, str(state))
+    assert display_host("100.122.3.4") == "nixbot-worker-eb791d5d"
+    assert display_host("rofl-15.brkn.lol") == "rofl-15"
+    # A missing or unreadable file means no names, not an error.
+    monkeypatch.setenv(POOL_STATE_FILE_ENV, str(tmp_path / "missing.json"))
+    assert pool_workers() == {}
+    bad = tmp_path / "bad.json"
+    bad.write_text("{not json")
+    monkeypatch.setenv(POOL_STATE_FILE_ENV, str(bad))
+    assert pool_workers() == {}
+
+
+async def test_builders_source_names_pool_workers(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    (tmp_path / "machines").write_text(MACHINES)
+    (tmp_path / "state.json").write_text(json.dumps(POOL_STATE))
+    monkeypatch.setenv(BUILDERS_FILE_ENV, str(tmp_path / "machines"))
+    monkeypatch.delenv(STATIC_BUILDERS_FILE_ENV, raising=False)
+    monkeypatch.setenv(POOL_STATE_FILE_ENV, str(tmp_path / "state.json"))
+    machines = {m.host: m for m in await BuildersSource().machines()}
+    worker = machines["100.122.3.4"]
+    assert worker.kind == "pool"
+    assert worker.worker is not None
+    assert worker.worker.name == "nixbot-worker-eb791d5d"
+    assert machines["rofl-15"].worker is None
+
+
+def test_host_counts_merges_short_names() -> None:
+    assert host_counts([]) == ""
+    assert (
+        host_counts([("rofl-15.brkn.lol", 2), ("rofl-15", 3), ("rofl-16", 65)])
+        == "rofl-15 (\N{MULTIPLICATION SIGN}5), rofl-16 (\N{MULTIPLICATION SIGN}65)"
+    )
+
+
 def test_build_hosts_filter() -> None:
     assert build_hosts({}) == ""
     assert build_hosts({"hosts": {"eval": [], "build": []}}) == ""
@@ -165,6 +247,11 @@ def test_build_hosts_filter() -> None:
         == "eval rofl-15, rofl-16 · build rofl-14"
     )
     assert build_hosts({"hosts": {"eval": [], "build": ["rofl-16"]}}) == "build rofl-16"
+    # Older rows stored FQDNs: one host, listed once.
+    assert (
+        build_hosts({"hosts": {"eval": ["rofl-15.brkn.lol", "rofl-15"], "build": []}})
+        == "eval rofl-15"
+    )
 
 
 @pytest.fixture(scope="module")
@@ -202,7 +289,9 @@ def client(
     tmp = tmp_path_factory.mktemp("builders")
     (tmp / "machines").write_text(MACHINES)
     (tmp / "static").write_text(MACHINES.splitlines()[1] + "\n")
+    (tmp / "state.json").write_text(json.dumps(POOL_STATE))
     mp = pytest.MonkeyPatch()
+    mp.setenv(POOL_STATE_FILE_ENV, str(tmp / "state.json"))
     mp.setenv(BUILDERS_FILE_ENV, str(tmp / "machines"))
     mp.setenv(STATIC_BUILDERS_FILE_ENV, str(tmp / "static"))
     mp.setenv(EVALUATORS_ENV, "rofl-15.brkn.lol rofl-16.brkn.lol")
@@ -246,6 +335,9 @@ def test_builders_page(client: WebHarness) -> None:
     assert 'id="machine-rofl-15"' in text
     assert 'id="machine-100.122.3.4"' in text
     assert "pool worker" in text
+    # The pool worker reads by its name, its address in the tooltip.
+    assert ">nixbot-worker-eb791d5d</code>" in text
+    assert "· idle" in text
     assert "firefox-160.0.1" in text
     assert "1 / 16" in text  # rofl-15: one of 16 slots busy
     assert "/builds/3/logs/x86_64-linux.slow" in text

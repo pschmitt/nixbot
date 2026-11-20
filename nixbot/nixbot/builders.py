@@ -12,10 +12,12 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import json
 import logging
 import os
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import Any
 
 from .executor import local_host, machine_host, short_host
 
@@ -29,6 +31,86 @@ BUILDERS_FILE_ENV = "NIXBOT_BUILDERS_FILE"
 STATIC_BUILDERS_FILE_ENV = "NIXBOT_STATIC_BUILDERS_FILE"
 # Space-separated hosts that run evaluations (remote evaluation).
 EVALUATORS_ENV = "NIXBOT_EVALUATORS"
+# State file of a pool autoscaler (JSON object: worker name -> {"ip",
+# "ips": {overlay: ip}, "state", "created", "lastBusy", ...}). Its
+# machines file addresses workers by IP; this names them.
+POOL_STATE_FILE_ENV = "NIXBOT_POOL_STATE_FILE"
+
+
+@dataclass(frozen=True)
+class PoolWorker:
+    name: str
+    state: str | None = None
+    created: float | None = None
+    last_busy: float | None = None
+
+
+def _num(value: Any) -> float | None:
+    return float(value) if isinstance(value, int | float) else None
+
+
+def parse_pool_state(data: Any) -> dict[str, PoolWorker]:
+    """Address (IP or host) -> worker, from an autoscaler state object.
+    Tolerant: unknown fields are ignored, malformed entries skipped."""
+    out: dict[str, PoolWorker] = {}
+    if not isinstance(data, dict):
+        return out
+    for name, entry in data.items():
+        if not isinstance(name, str) or not isinstance(entry, dict):
+            continue
+        worker = PoolWorker(
+            name=name,
+            state=entry["state"] if isinstance(entry.get("state"), str) else None,
+            created=_num(entry.get("created")),
+            last_busy=_num(entry.get("lastBusy")),
+        )
+        addresses = [entry.get("ip")]
+        if isinstance(entry.get("ips"), dict):
+            addresses += list(entry["ips"].values())
+        for address in addresses:
+            if isinstance(address, str) and address:
+                out[address] = worker
+    return out
+
+
+class _PoolState:
+    """The pool state file, re-read when its mtime changes."""
+
+    def __init__(self) -> None:
+        self._key: tuple[str, float] | None = None
+        self._workers: dict[str, PoolWorker] = {}
+
+    def workers(self) -> dict[str, PoolWorker]:
+        path = os.environ.get(POOL_STATE_FILE_ENV)
+        if not path:
+            return {}
+        try:
+            mtime = Path(path).stat().st_mtime
+        except OSError:
+            return {}
+        if self._key != (path, mtime):
+            try:
+                data = json.loads(Path(path).read_text())
+            except (OSError, ValueError) as e:
+                logger.warning("cannot read pool state %s: %s", path, e)
+                data = None
+            self._workers = parse_pool_state(data)
+            self._key = (path, mtime)
+        return self._workers
+
+
+_pool_state = _PoolState()
+
+
+def pool_workers() -> dict[str, PoolWorker]:
+    """Pool workers by address (NIXBOT_POOL_STATE_FILE), {} without it."""
+    return _pool_state.workers()
+
+
+def worker_name(host: str) -> str | None:
+    """The pool worker name of a machine host (an IP), if known."""
+    worker = pool_workers().get(host)
+    return worker.name if worker else None
 
 
 @dataclass(frozen=True)
@@ -41,6 +123,8 @@ class Machine:
     supported_features: list[str] = field(default_factory=list)
     mandatory_features: list[str] = field(default_factory=list)
     kind: str = "static"  # static | pool | local
+    # Named by the pool state file, when the host is one of its workers.
+    worker: PoolWorker | None = None
 
 
 def _list(value: str) -> list[str]:
@@ -163,7 +247,11 @@ class BuildersSource:
         static_uris = None
         if static := os.environ.get(STATIC_BUILDERS_FILE_ENV):
             static_uris = {m.uri for m in parse_builders(f"@{static}")}
-        remote = classify(parse_builders(spec), static_uris)
+        workers = pool_workers()
+        remote = [
+            replace(m, kind="pool", worker=workers[m.host]) if m.host in workers else m
+            for m in classify(parse_builders(spec), static_uris)
+        ]
         local = Machine(
             uri="local",
             host=local_host(),

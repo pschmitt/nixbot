@@ -3,5 +3,5 @@
 -- was built (the machine of nix's build activity). NULL when unknown,
 -- substituted or never built.
 ALTER TABLE build_attributes
-    ADD COLUMN eval_host TEXT,
-    ADD COLUMN build_host TEXT;
+    ADD COLUMN IF NOT EXISTS eval_host TEXT,
+    ADD COLUMN IF NOT EXISTS build_host TEXT;

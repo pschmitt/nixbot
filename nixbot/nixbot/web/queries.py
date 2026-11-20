@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..db_gen import builds as builds_gen  # noqa: TID252
 from ..db_gen import web as gen  # noqa: TID252
+from ..executor import short_host  # noqa: TID252
 from ..sql_util import row_dict, row_dicts  # noqa: TID252
 
 if TYPE_CHECKING:
@@ -351,7 +352,13 @@ class WebQueries:
     ) -> dict[int, list[tuple[str, int]]]:
         if not build_ids:
             return {}
-        out: dict[int, list[tuple[str, int]]] = {}
+        # Merged by short name: older rows stored FQDNs (rofl-15.example.org
+        # and rofl-15 are one host).
+        merged: dict[int, dict[str, int]] = {}
         for r in await gen.web_eval_host_counts(self.pool, build_ids=build_ids):
-            out.setdefault(r.build_id, []).append((r.eval_host, r.jobs))
-        return out
+            if r.eval_host is None:
+                continue
+            hosts = merged.setdefault(r.build_id, {})
+            host = short_host(r.eval_host)
+            hosts[host] = hosts.get(host, 0) + r.jobs
+        return {b: sorted(hosts.items()) for b, hosts in merged.items()}

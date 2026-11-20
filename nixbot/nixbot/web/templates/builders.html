@@ -28,9 +28,22 @@
             {% set m = row.machine %}
             <tr id="machine-{{ m.host }}">
               <td>
-                <code title="{{ m.uri }}">{{ m.host }}</code>
+                {% if m.worker %}
+                  <code title="{{ m.host }} ({{ m.uri }})">{{ m.worker.name }}</code>
+                {% else %}
+                  <code title="{{ m.uri }}">{{ m.host }}</code>
+                {% endif %}
               </td>
-              <td class="muted">{{ "pool worker" if m.kind == "pool" else m.kind }}</td>
+              <td class="muted">
+                {% if m.kind == "pool" %}
+                  pool worker
+                  {%- if m.worker and m.worker.state %}· {{ m.worker.state }}{% endif %}
+                  {%- if m.worker and m.worker.created %}· up {{ m.worker.created | since_ts }}{% endif %}
+                  {%- if m.worker and m.worker.last_busy %}· busy {{ m.worker.last_busy | since_ts }} ago{% endif %}
+                {% else %}
+                  {{ m.kind }}
+                {% endif %}
+              </td>
               <td class="{{ 'muted' if not row.builds }}">{{ row.builds | length }} / {{ m.max_jobs }}</td>
               <td class="build-hosts muted"
                   title="{{ m.supported_features | join(', ') }}">{{ m.systems | join(", ") or "–" }}</td>
@@ -40,7 +53,7 @@
           {% for host, builds in unlisted.items() %}
             <tr id="machine-{{ host }}">
               <td>
-                <code>{{ host }}</code>
+                <code title="{{ host }}">{{ host | display_host }}</code>
               </td>
               <td class="muted">removed</td>
               <td>{{ builds | length }}</td>
@@ -105,9 +118,7 @@
                   <span class="muted">evaluating</span>
                 {% endif %}
               </td>
-              <td class="muted">
-                {% for host, jobs in e.hosts %}{{ host }} {{ jobs }}{{ ", " if not loop.last }}{% else %}–{% endfor %}
-              </td>
+              <td class="muted">{{ e.hosts | host_counts or "–" }}</td>
             </tr>
           {% else %}
             <tr>

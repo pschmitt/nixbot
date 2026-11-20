@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -15,6 +16,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from markupsafe import Markup
 
 from ..ansi import strip_ansi  # noqa: TID252
+from ..builders import worker_name  # noqa: TID252
 from ..fmt import format_bytes, format_duration, format_ms  # noqa: TID252
 from .logs import ansi_to_html
 
@@ -103,8 +105,21 @@ def attr_hosts(row: dict[str, Any], *, full: bool = False) -> str:
     for label, key in (("eval", "eval_host"), ("build", "build_host")):
         host = row.get(key)
         if host:
-            parts.append(f"{label} {host if full else _short_host(host)}")
+            parts.append(f"{label} {host if full else display_host(host)}")
     return " · ".join(parts)
+
+
+def display_host(host: str) -> str:
+    """How a host reads in the UI: its pool worker name when the pool
+    state knows the address, else the short name (older rows stored
+    FQDNs)."""
+    return worker_name(host) or _short_host(host)
+
+
+def _unique(hosts: list[str]) -> list[str]:
+    """Display names in first-seen order, duplicates dropped (rofl-15
+    and rofl-15.example.org are one host)."""
+    return list(dict.fromkeys(display_host(h) for h in hosts))
 
 
 def build_hosts(build: dict[str, Any]) -> str:
@@ -112,11 +127,30 @@ def build_hosts(build: dict[str, Any]) -> str:
     without hosts are left out, empty when nothing is known."""
     hosts = build.get("hosts") or {}
     parts = [
-        f"{label} {', '.join(_short_host(h) for h in hosts[key])}"
+        f"{label} {', '.join(_unique(hosts[key]))}"
         for label, key in (("eval", "eval"), ("build", "build"))
         if hosts.get(key)
     ]
     return " · ".join(parts)
+
+
+def since_ts(ts: float | None) -> str:
+    """Time since a Unix timestamp, e.g. "2h 5m"; empty when unknown."""
+    if ts is None:
+        return ""
+    return duration_secs(max(time.time() - ts, 0))
+
+
+def host_counts(counts: list[tuple[str, int]]) -> str:
+    """Jobs per host, e.g. "rofl-15 (\N{MULTIPLICATION SIGN}65)", hosts
+    merged after shortening their names."""
+    merged: dict[str, int] = {}
+    for host, n in counts:
+        name = display_host(host)
+        merged[name] = merged.get(name, 0) + n
+    return ", ".join(
+        f"{h} (\N{MULTIPLICATION SIGN}{n})" for h, n in sorted(merged.items())
+    )
 
 
 def live_build_text(active: list[Any]) -> str:
@@ -124,12 +158,12 @@ def live_build_text(active: list[Any]) -> str:
     if not active:
         return ""
     first = active[0]
-    text = f"building {first.name} on {first.host}"
+    text = f"building {first.name} on {display_host(first.host)}"
     return f"{text} +{len(active) - 1} more" if len(active) > 1 else text
 
 
 def live_build_title(active: list[Any]) -> str:
-    return "\n".join(f"{a.name} on {a.host}" for a in active)
+    return "\n".join(f"{a.name} on {display_host(a.host)}" for a in active)
 
 
 def _forge_base(project: dict[str, Any]) -> str | None:
@@ -210,6 +244,9 @@ def make_env() -> Environment:
     env.filters["eval_stats"] = eval_stats
     env.filters["attr_hosts"] = attr_hosts
     env.filters["build_hosts"] = build_hosts
+    env.filters["host_counts"] = host_counts
+    env.filters["since_ts"] = since_ts
+    env.filters["display_host"] = display_host
     env.filters["live_build_text"] = live_build_text
     env.filters["live_build_title"] = live_build_title
     # Replaced by create_app with the process's live registry.
