@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Annotated
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from ..forge import ForgeError  # noqa: TID252
 from ..repos import RepoStore, repo_info  # noqa: TID252
+from .logs import _failure_summary
 
 if TYPE_CHECKING:
     from ..effects_state import TaskClaim, TaskTokens  # noqa: TID252
@@ -57,4 +58,31 @@ def create_task_router(ctx: WebContext, tokens: TaskTokens) -> APIRouter:
             raise HTTPException(status_code=502, detail=str(e)) from e
         return {}
 
+    @router.get("/api/v1/build-failures")
+    async def build_failures(
+        request: Request,
+        tail: Annotated[int, Query(ge=1, le=1000)] = 1000,
+    ) -> dict:
+        """Return the summary for this effect's build, scoped by its task token."""
+        return await _build_failures(ctx, request, _claim(request), tail)
+
     return router
+
+
+async def _build_failures(
+    ctx: WebContext, request: Request, claim: TaskClaim, tail: int
+) -> dict:
+    build_id = claim.identity.build_id if claim.identity else None
+    if build_id is None:
+        raise HTTPException(status_code=403, detail="this run has no build")
+    build = await ctx.pool.fetchrow(
+        "SELECT id, status, error, eval_warnings FROM builds "
+        "WHERE id = $1 AND project_id = $2",
+        build_id,
+        claim.project_id,
+    )
+    if build is None:
+        raise HTTPException(status_code=404, detail="build not found")
+    return await _failure_summary(
+        ctx, request.app.state.log_registry, dict(build), tail
+    )
