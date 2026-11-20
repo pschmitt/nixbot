@@ -11,7 +11,13 @@ from typing import Any
 
 from .errors import EffectError
 
-KINDS = ("pull_request", "pull_request_closed", "comment", "build_finished")
+KINDS = (
+    "pull_request",
+    "pull_request_closed",
+    "comment",
+    "build_finished",
+    "build_started",
+)
 WHEN_KEYS = frozenset(
     {"permission", "labels", "branches", "commands", "modified", "status", "transition"}
 )
