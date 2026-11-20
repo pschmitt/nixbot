@@ -12,12 +12,16 @@ from nixbot_effects import EffectError
 from nixbot.effects import (
     EffectsContext,
     effect_push_url,
+    effects_context,
     list_effects,
     resolve_effects_secret,
     run_effect,
     should_run_effects,
 )
+from nixbot.events import RepoInfo
 from nixbot.repo_config import BranchConfig
+
+from .support import git, init_upstream, make_config
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -82,6 +86,42 @@ def test_should_run_effects_branch_globs() -> None:
     assert should_run_effects(config, "main", "release-1.0", is_pull_request=False)
     assert should_run_effects(config, "main", "staging", is_pull_request=False)
     assert not should_run_effects(config, "main", "feature", is_pull_request=False)
+
+
+def test_effects_context_evaluates_worktree_head(tmp_path: Path) -> None:
+    """A PR build's worktree is checked out at the merge into the base;
+    the flake is evaluated there, not at the reported head rev, whose
+    blobs a blobless mirror need not hold."""
+    worktree = init_upstream(tmp_path / "wt")
+    pr_head = git(worktree, "rev-parse", "HEAD")
+    (worktree / "base.txt").write_text("base")
+    git(worktree, "add", ".")
+    git(worktree, "commit", "-q", "-m", "merge")
+    merge = git(worktree, "rev-parse", "HEAD")
+    git(worktree, "checkout", "-q", "--detach")
+    info = RepoInfo(
+        id=1,
+        key="github/acme/widget",
+        name="acme/widget",
+        owner="acme",
+        repo="widget",
+        forge="github",
+        clone_url="https://github.com/acme/widget.git",
+        default_branch="main",
+    )
+
+    ctx = effects_context(
+        make_config("postgresql:///unused", tmp_path / "state"),
+        info,
+        worktree_path=worktree,
+        rev=pr_head,
+        branch="feature",
+        git_token=None,
+        task_token=None,
+    )
+
+    assert ctx.rev == pr_head
+    assert ctx.locked_url == f"git+file://{worktree}?ref=HEAD&rev={merge}"
 
 
 def test_effect_push_url() -> None:

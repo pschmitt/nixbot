@@ -31,6 +31,7 @@ from urllib.parse import urlsplit
 import nixbot_effects
 from nixbot_effects import EffectError, EffectMeta, EffectsOptions
 
+from .nix_eval import detached_head_rev
 from .redact import Redactor, secret_literals
 
 if TYPE_CHECKING:
@@ -115,10 +116,21 @@ def effects_context(  # noqa: PLR0913
     tag: str | None = None,
 ) -> EffectsContext:
     """Context with the service-level configuration filled in. Shared
-    by push and scheduled effect runs. A tag push has no branch."""
+    by push and scheduled effect runs. A tag push has no branch.
+
+    `rev` is the reported commit (primaryRepo.rev); the flake is
+    evaluated at the worktree's own HEAD. They differ for a PR build
+    (HEAD is the merge into the base) and for a push reusing such a
+    build. The blobless mirror only holds the blobs of trees that were
+    checked out, and nix's libgit2 cannot fetch missing ones lazily, so
+    evaluating `rev` fails with "object not found" there."""
+    head = detached_head_rev(worktree_path)
     return EffectsContext(
         path=worktree_path,
         rev=rev,
+        locked_url=(
+            f"git+file://{worktree_path}?ref=HEAD&rev={head}" if head else None
+        ),
         branch=branch,
         tag=tag,
         detect_tag=False,
