@@ -141,7 +141,7 @@ async def _rerun_names(
     while changed:
         changed = False
         for r in rows:
-            deps = set(json.loads(r.deps)) if r.deps else set()
+            deps = set(json.loads(r.deps) or ()) if r.deps else set()
             # A still-pending dependent would be stranded behind the
             # rerun row it waits on.
             stranded = r.status in ("dependency_failed", "pending")
