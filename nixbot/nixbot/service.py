@@ -122,6 +122,18 @@ class RetryingReporter:
 
     async def build_started(self, event: ChangeEvent, build: BuildRecord) -> None:
         await self.inner.build_started(event, build)
+        if event.pr_number is not None:
+            await self.service.enqueue_work(
+                "deliver",
+                f"deliver-{build.project_id}-pr-{event.pr_number}",
+                {
+                    "kind": "build_started",
+                    "build_id": build.id_,
+                    "actor": event.actor,
+                    "pr_number": event.pr_number,
+                    "rev": event.commit_sha,
+                },
+            )
 
     async def eval_finished(
         self, event: ChangeEvent, build: BuildRecord, report: EvalReport

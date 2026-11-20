@@ -8,7 +8,9 @@ import math
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -898,6 +900,25 @@ def test_work_retry_delay_honors_retry_after() -> None:
     assert work_retry_delay(2, 240, 30) == 240
     assert work_retry_delay(1, 7200, 30) == 3600
     assert work_retry_delay(20, None, 30) == 900
+
+
+async def test_pr_build_start_is_queued() -> None:
+    inner = NullStatusReporter()
+    # Stand-ins with only the attributes build_started reads.
+    service: Any = SimpleNamespace(enqueue_work=AsyncMock())
+    wrapper = RetryingReporter(inner, service)
+    build: Any = SimpleNamespace(id_=15, project_id=3)
+    event: Any = SimpleNamespace(pr_number=7, actor="github:alice", commit_sha="abc")
+    await wrapper.build_started(event, build)
+    service.enqueue_work.assert_awaited_once_with(
+        "deliver", "deliver-3-pr-7",
+        {"kind": "build_started", "build_id": 15, "actor": "github:alice",
+         "pr_number": 7, "rev": "abc"},
+    )
+    service.enqueue_work.reset_mock()
+    event.pr_number = None
+    await wrapper.build_started(event, build)
+    service.enqueue_work.assert_not_awaited()
 
 
 async def test_report_retry(postgres_dsn: str, tmp_path: Path) -> None:

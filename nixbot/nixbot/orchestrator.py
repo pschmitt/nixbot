@@ -451,7 +451,11 @@ class Orchestrator:
             "once": True,
         }
         if event.pr_number is not None and build.status == BuildStatus.SUCCEEDED:
-            await queue.enqueue("deliver", key, {"kind": "pull_request", **base})
+            await queue.enqueue(
+                "deliver",
+                key,
+                {"kind": "pull_request", "rev": event.commit_sha, **base},
+            )
         if finished and build.status in (BuildStatus.SUCCEEDED, BuildStatus.FAILED):
             previous = await ev_q.previous_finished_status(
                 self.pool, build_id=build.id_

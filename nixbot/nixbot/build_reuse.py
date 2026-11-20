@@ -51,7 +51,10 @@ async def attach_linked_event(
             o.linked_events[build.id_].remove(event)
         await replay_terminal_status(o, event, current)
         await o.deliver_tag(event, current, current.status)
-        await deliver_branch_push(o, event, current)
+        if event.pr_number is not None:
+            await o.deliver_events(event, current)
+        else:
+            await deliver_branch_push(o, event, current)
 
 
 async def replay_terminal_status(
@@ -111,7 +114,12 @@ async def finish_linked(
             await o.reporter.eval_cancelled(linked, build)
         await o.reporter.build_finished(linked, build, result)
         await o.deliver_tag(linked, build, result.status)
-        await deliver_branch_push(o, linked, build)
+        if linked.pr_number is not None:
+            current = await builds_q.get_build(o.pool, id_=build.id_)
+            if current is not None:
+                await o.deliver_events(linked, current)
+        else:
+            await deliver_branch_push(o, linked, build)
 
 
 async def deliver_branch_push(

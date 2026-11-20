@@ -86,5 +86,5 @@ async def _deliveries(
     if refreshed is not None:
         # A reused build's build_finished went to the context that built it,
         # often a PR. A branch push needs its own.
-        finished = not reused or (event.pr_number is None and event.tag is None)
+        finished = not reused or event.tag is None
         await o.deliver_events(event, refreshed, finished=finished)

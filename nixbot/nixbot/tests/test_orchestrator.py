@@ -2278,8 +2278,8 @@ async def build_finished_deliveries(pool: asyncpg.Pool) -> list[dict[str, object
 async def test_push_reusing_pr_build_delivers_build_finished(
     pool: asyncpg.Pool, make_env: EnvFactory, upstream: Path
 ) -> None:
-    """A branch push reusing a PR's build gets its own build_finished; a
-    PR reusing a build gets none."""
+    """A branch push reusing a PR's build gets its own build_finished, and
+    so does a PR reusing a build: its status comment needs the result."""
     pr_sha = add_commit(upstream, "reuse-finished")
     orchestrator, _, project = await make_env(
         FakeEvalRunner([mk_job("a")]), FakeExecutor(), name="reuse-finished"
@@ -2316,14 +2316,15 @@ async def test_push_reusing_pr_build_delivers_build_finished(
     await orchestrator.handle_change_event(
         ChangeEvent(repo=project, branch="main", commit_sha=again_sha, pr_number=10)
     )
-    assert await build_finished_deliveries(pool) == []
+    [pr_again] = await build_finished_deliveries(pool)
+    assert pr_again["pr_number"] == 10
 
 
 async def test_push_linking_running_pr_build_delivers_build_finished(
     pool: asyncpg.Pool, make_env: EnvFactory, upstream: Path
 ) -> None:
     """A branch push that links to a PR's still running build gets its own
-    build_finished when it finishes. A PR linking to it gets none."""
+    build_finished when it finishes. A linked PR gets its own delivery."""
     pr_sha = add_commit(upstream, "link-running")
     executor = FakeExecutor(gate=asyncio.Event())
     orchestrator, _, project = await make_env(
@@ -2356,6 +2357,7 @@ async def test_push_linking_running_pr_build_delivers_build_finished(
     assert sorted((d.get("pr_number") or 0, d["rev"]) for d in deliveries) == [
         (0, main_sha),
         (9, pr_sha),
+        (10, main_sha),
     ]
 
 
