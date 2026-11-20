@@ -29,6 +29,7 @@ import json
 import logging
 import os
 import re
+import socket
 import time
 from collections import OrderedDict, deque
 from dataclasses import dataclass, field
@@ -484,6 +485,17 @@ RES_BUILD_LOG_LINE = 101
 RES_SET_PHASE = 104
 
 
+def machine_host(machine: str) -> str:
+    """Host name of a nix machine/store URI: `ssh-ng://user@host:22?k=v`
+    -> `host`. Empty for an empty (local) machine."""
+    rest = machine.split("://", 1)[-1]
+    rest = rest.split("?", 1)[0].split("/", 1)[0]
+    rest = rest.rsplit("@", 1)[-1]
+    if rest.startswith("["):  # [ipv6]:port
+        return rest[1:].split("]", 1)[0]
+    return rest.split(":", 1)[0]
+
+
 def _drv_display_name(drv_path: str) -> str:
     name = drv_path.rsplit("/", 1)[-1].removesuffix(".drv")
     _, _, name = name.partition("-")  # drop the store hash
@@ -525,6 +537,8 @@ class StructuredCapture:
         self._subs: list[asyncio.Queue[dict | None]] = []
         self._closed = False
         self._on_built = on_built
+        # drv -> machine of its build activity ("" = this host).
+        self._machines: dict[str, str] = {}
         self._w.register(self.SETUP, "setup")
 
     def _ts(self) -> int:
@@ -587,8 +601,9 @@ class StructuredCapture:
             self._put(q, None)
         self._subs.clear()
 
-    def start_build(self, act_id: int, drv_path: str) -> None:
+    def start_build(self, act_id: int, drv_path: str, machine: str = "") -> None:
         self._act[act_id] = drv_path
+        self._machines[drv_path] = machine
         name = _drv_display_name(drv_path)
         self._w.register(drv_path, name)
         if drv_path not in self._idx:
@@ -716,12 +731,22 @@ class StructuredCapture:
     def finalize(self) -> bytes:
         return self._w.finalize()
 
+    def build_host(self, drv_path: str) -> str | None:
+        """Host that ran the builder for `drv_path`: the remote builder's
+        host name, this host's name for a local build, None when nix
+        never started a build for it (substituted, already valid)."""
+        if drv_path not in self._machines:
+            return None
+        return machine_host(self._machines[drv_path]) or socket.gethostname()
+
 
 def _feed_capture(event: Any, capture: StructuredCapture) -> None:
     action, etype = event.get("action"), event.get("type")
     fields = event.get("fields") or []
     if action == "start" and etype == ACT_BUILD and fields:
-        capture.start_build(event["id"], str(fields[0]))
+        # fields: drvPath, machineName ("" for a local build), round, rounds
+        machine = str(fields[1]) if len(fields) > 1 and fields[1] else ""
+        capture.start_build(event["id"], str(fields[0]), machine)
     elif action == "result" and etype == RES_BUILD_LOG_LINE:
         capture.log_line(event.get("id"), (fields or [""])[0])
     elif action == "result" and etype == RES_SET_PHASE and fields and fields[0]:

@@ -222,6 +222,8 @@ class WebAttributeHistoryRow:
     eval_warnings: str | None
     eval_wall_ms: int | None
     eval_alloc_bytes: int | None
+    eval_host: str | None
+    build_host: str | None
     build_number: int
     branch: str
     commit_sha: str
@@ -271,6 +273,8 @@ class AttributeStatusRow:
     status: str
     eval_wall_ms: int | None
     eval_alloc_bytes: int | None
+    eval_host: str | None
+    build_host: str | None
 
 
 @dataclasses.dataclass()
@@ -511,7 +515,7 @@ FROM builds WHERE project_id = $1
 """
 
 WEB_ATTRIBUTES: typing.Final[str] = """-- name: WebAttributes :many
-SELECT a.id, a.build_id, a.attr, a.system, a.drv_path, a.outputs, a.status, a.cached, a.error, a.started_at, a.finished_at, a.log_size, a.log_truncated, a.eval_warnings, a.eval_wall_ms, a.eval_alloc_bytes FROM build_attributes a
+SELECT a.id, a.build_id, a.attr, a.system, a.drv_path, a.outputs, a.status, a.cached, a.error, a.started_at, a.finished_at, a.log_size, a.log_truncated, a.eval_warnings, a.eval_wall_ms, a.eval_alloc_bytes, a.eval_host, a.build_host FROM build_attributes a
 WHERE a.build_id = $1
 ORDER BY CASE
     WHEN a.status IN ('failed', 'failed_eval', 'dependency_failed',
@@ -524,7 +528,7 @@ END, a.attr
 """
 
 WEB_ATTRIBUTES_FINISHED_AFTER: typing.Final[str] = """-- name: WebAttributesFinishedAfter :many
-SELECT a.id, a.build_id, a.attr, a.system, a.drv_path, a.outputs, a.status, a.cached, a.error, a.started_at, a.finished_at, a.log_size, a.log_truncated, a.eval_warnings, a.eval_wall_ms, a.eval_alloc_bytes FROM build_attributes a
+SELECT a.id, a.build_id, a.attr, a.system, a.drv_path, a.outputs, a.status, a.cached, a.error, a.started_at, a.finished_at, a.log_size, a.log_truncated, a.eval_warnings, a.eval_wall_ms, a.eval_alloc_bytes, a.eval_host, a.build_host FROM build_attributes a
 WHERE a.build_id = $1 AND a.finished_at IS NOT NULL
   AND ($2::timestamptz IS NULL
        OR (a.finished_at, a.id) > ($2::timestamptz,
@@ -560,7 +564,7 @@ GROUP BY status
 """
 
 WEB_ATTRIBUTE_PAGE: typing.Final[str] = """-- name: WebAttributePage :many
-SELECT a.id, a.build_id, a.attr, a.system, a.drv_path, a.outputs, a.status, a.cached, a.error, a.started_at, a.finished_at, a.log_size, a.log_truncated, a.eval_warnings, a.eval_wall_ms, a.eval_alloc_bytes FROM build_attributes a
+SELECT a.id, a.build_id, a.attr, a.system, a.drv_path, a.outputs, a.status, a.cached, a.error, a.started_at, a.finished_at, a.log_size, a.log_truncated, a.eval_warnings, a.eval_wall_ms, a.eval_alloc_bytes, a.eval_host, a.build_host FROM build_attributes a
 WHERE a.build_id = $1 AND a.status = ANY($2::text[])
   AND ($3::text IS NULL OR a.attr ILIKE $3)
 ORDER BY (a.eval_warnings IS NULL), a.attr
@@ -568,7 +572,7 @@ LIMIT $5::bigint OFFSET $4::bigint
 """
 
 WEB_ATTRIBUTE_HISTORY: typing.Final[str] = """-- name: WebAttributeHistory :many
-SELECT a.id, a.build_id, a.attr, a.system, a.drv_path, a.outputs, a.status, a.cached, a.error, a.started_at, a.finished_at, a.log_size, a.log_truncated, a.eval_warnings, a.eval_wall_ms, a.eval_alloc_bytes, b.number AS build_number, b.branch, b.commit_sha,
+SELECT a.id, a.build_id, a.attr, a.system, a.drv_path, a.outputs, a.status, a.cached, a.error, a.started_at, a.finished_at, a.log_size, a.log_truncated, a.eval_warnings, a.eval_wall_ms, a.eval_alloc_bytes, a.eval_host, a.build_host, b.number AS build_number, b.branch, b.commit_sha,
        b.created_at AS build_created_at
 FROM build_attributes a
 JOIN builds b ON b.id = a.build_id
@@ -599,7 +603,8 @@ ORDER BY b.status = 'pending', b.id
 """
 
 ATTRIBUTE_STATUS: typing.Final[str] = """-- name: AttributeStatus :one
-SELECT status, eval_wall_ms, eval_alloc_bytes FROM build_attributes
+SELECT status, eval_wall_ms, eval_alloc_bytes, eval_host, build_host
+FROM build_attributes
 WHERE build_id = $1 AND attr = $2
 """
 
@@ -961,6 +966,8 @@ def web_attributes(conn: ConnectionLike, *, build_id: int) -> QueryResults[model
             eval_warnings=row[13],
             eval_wall_ms=row[14],
             eval_alloc_bytes=row[15],
+            eval_host=row[16],
+            build_host=row[17],
         )
 
     return QueryResults(conn, WEB_ATTRIBUTES, _decode_hook, build_id)
@@ -985,6 +992,8 @@ def web_attributes_finished_after(conn: ConnectionLike, *, build_id: int, after:
             eval_warnings=row[13],
             eval_wall_ms=row[14],
             eval_alloc_bytes=row[15],
+            eval_host=row[16],
+            build_host=row[17],
         )
 
     return QueryResults(conn, WEB_ATTRIBUTES_FINISHED_AFTER, _decode_hook, build_id, after, after_id)
@@ -1060,6 +1069,8 @@ def web_attribute_page(conn: ConnectionLike, *, build_id: int, statuses: collect
             eval_warnings=row[13],
             eval_wall_ms=row[14],
             eval_alloc_bytes=row[15],
+            eval_host=row[16],
+            build_host=row[17],
         )
 
     return QueryResults(conn, WEB_ATTRIBUTE_PAGE, _decode_hook, build_id, statuses, pattern, offset_, limit_)
@@ -1084,10 +1095,12 @@ def web_attribute_history(conn: ConnectionLike, *, project_id: int, attr: str, l
             eval_warnings=row[13],
             eval_wall_ms=row[14],
             eval_alloc_bytes=row[15],
-            build_number=row[16],
-            branch=row[17],
-            commit_sha=row[18],
-            build_created_at=row[19],
+            eval_host=row[16],
+            build_host=row[17],
+            build_number=row[18],
+            branch=row[19],
+            commit_sha=row[20],
+            build_created_at=row[21],
         )
 
     return QueryResults(conn, WEB_ATTRIBUTE_HISTORY, _decode_hook, project_id, attr, limit_)
@@ -1140,7 +1153,7 @@ async def attribute_status(conn: ConnectionLike, *, build_id: int, attr: str) ->
     row = await conn.fetchrow(ATTRIBUTE_STATUS, build_id, attr)
     if row is None:
         return None
-    return AttributeStatusRow(status=row[0], eval_wall_ms=row[1], eval_alloc_bytes=row[2])
+    return AttributeStatusRow(status=row[0], eval_wall_ms=row[1], eval_alloc_bytes=row[2], eval_host=row[3], build_host=row[4])
 
 
 async def attribute_error(conn: ConnectionLike, *, build_id: int, attr: str) -> str | None:

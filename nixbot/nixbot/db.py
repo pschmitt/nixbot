@@ -183,6 +183,8 @@ async def complete_attribute(  # noqa: PLR0913
         eval_warnings=json.dumps(warnings) if warnings else None,
         eval_wall_ms=stats.wall_ms if stats else None,
         eval_alloc_bytes=stats.alloc_bytes if stats else None,
+        eval_host=job.eval_host,
+        build_host=result.build_host,
         if_unfinished=if_unfinished,
     )
 

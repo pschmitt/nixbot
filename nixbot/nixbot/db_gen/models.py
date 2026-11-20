@@ -67,6 +67,8 @@ class BuildAttribute:
     eval_warnings: str | None
     eval_wall_ms: int | None
     eval_alloc_bytes: int | None
+    eval_host: str | None
+    build_host: str | None
 
 
 @dataclasses.dataclass()

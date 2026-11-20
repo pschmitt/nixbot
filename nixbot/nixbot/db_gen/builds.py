@@ -166,23 +166,26 @@ RETURNING id, project_id, number, tree_hash, commit_sha, branch, pr_number, pr_a
 
 RECORD_ATTRIBUTES: typing.Final[str] = """-- name: RecordAttributes :exec
 INSERT INTO build_attributes (build_id, attr, system, drv_path, outputs,
-    eval_warnings, eval_wall_ms, eval_alloc_bytes, status)
+    eval_warnings, eval_wall_ms, eval_alloc_bytes, eval_host, status)
 SELECT $1::bigint, u.attr, u.system, u.drv_path, u.outputs,
-    NULLIF(u.eval_warnings, 'null'::jsonb), NULLIF(u.eval_wall_ms, -1), NULLIF(u.eval_alloc_bytes, -1), 'pending'
+    NULLIF(u.eval_warnings, 'null'::jsonb), NULLIF(u.eval_wall_ms, -1), NULLIF(u.eval_alloc_bytes, -1),
+    NULLIF(u.eval_host, ''), 'pending'
 FROM (SELECT unnest($2::text[]) AS attr,
              unnest($3::text[]) AS system,
              unnest($4::text[]) AS drv_path,
              unnest($5::jsonb[]) AS outputs,
              unnest($6::jsonb[]) AS eval_warnings,
              unnest($7::int[]) AS eval_wall_ms,
-             unnest($8::bigint[]) AS eval_alloc_bytes) u
+             unnest($8::bigint[]) AS eval_alloc_bytes,
+             unnest($9::text[]) AS eval_host) u
 ON CONFLICT (build_id, attr) DO UPDATE SET
     system = EXCLUDED.system,
     drv_path = EXCLUDED.drv_path,
     outputs = EXCLUDED.outputs,
     eval_warnings = EXCLUDED.eval_warnings,
     eval_wall_ms = EXCLUDED.eval_wall_ms,
-    eval_alloc_bytes = EXCLUDED.eval_alloc_bytes
+    eval_alloc_bytes = EXCLUDED.eval_alloc_bytes,
+    eval_host = EXCLUDED.eval_host
 WHERE build_attributes.status IN ('pending', 'building')
 """
 
@@ -274,11 +277,12 @@ COMPLETE_ATTRIBUTE: typing.Final[str] = """-- name: CompleteAttribute :exec
 INSERT INTO build_attributes
     (build_id, attr, system, drv_path, outputs, status, error,
      cached, log_size, log_truncated, finished_at,
-     eval_warnings, eval_wall_ms, eval_alloc_bytes)
+     eval_warnings, eval_wall_ms, eval_alloc_bytes, eval_host, build_host)
 VALUES ($1, $2, $3, $4, $8::jsonb, $5, $6, $7,
         $9::bigint, $10::boolean, now(),
         $11::jsonb, $12::int,
-        $13::bigint)
+        $13::bigint, $14::text,
+        $15::text)
 ON CONFLICT (build_id, attr) DO UPDATE SET
     status = EXCLUDED.status,
     -- Eval data is only known by failed_eval inserts. Build
@@ -286,6 +290,11 @@ ON CONFLICT (build_id, attr) DO UPDATE SET
     eval_warnings = COALESCE(EXCLUDED.eval_warnings, build_attributes.eval_warnings),
     eval_wall_ms = COALESCE(EXCLUDED.eval_wall_ms, build_attributes.eval_wall_ms),
     eval_alloc_bytes = COALESCE(EXCLUDED.eval_alloc_bytes, build_attributes.eval_alloc_bytes),
+    eval_host = COALESCE(EXCLUDED.eval_host, build_attributes.eval_host),
+    -- The machine of this completion's build; NULL when nothing was
+    -- built (cached, skipped, failed eval), also replacing a rerun's
+    -- earlier host.
+    build_host = EXCLUDED.build_host,
     -- Eval recorded the full outputs map (multi-output drvs);
     -- merge the freshly-known "out" path into it instead of
     -- replacing it, and never NULL an existing map when no out
@@ -301,7 +310,7 @@ ON CONFLICT (build_id, attr) DO UPDATE SET
     log_size = EXCLUDED.log_size,
     log_truncated = EXCLUDED.log_truncated,
     finished_at = now()
-WHERE NOT $14::boolean
+WHERE NOT $16::boolean
     OR build_attributes.status IN ('pending', 'building')
 """
 
@@ -683,8 +692,9 @@ async def record_attributes(
     eval_warnings: collections.abc.Sequence[str],
     eval_wall_ms: collections.abc.Sequence[int],
     eval_alloc_bytes: collections.abc.Sequence[int],
+    eval_hosts: collections.abc.Sequence[str],
 ) -> None:
-    await conn.execute(RECORD_ATTRIBUTES, build_id, attrs, systems, drv_paths, outputs, eval_warnings, eval_wall_ms, eval_alloc_bytes)
+    await conn.execute(RECORD_ATTRIBUTES, build_id, attrs, systems, drv_paths, outputs, eval_warnings, eval_wall_ms, eval_alloc_bytes, eval_hosts)
 
 
 async def set_eval_warnings(conn: ConnectionLike, *, id_: int, warnings: str) -> None:
@@ -778,9 +788,11 @@ async def complete_attribute(
     eval_warnings: str | None,
     eval_wall_ms: int | None,
     eval_alloc_bytes: int | None,
+    eval_host: str | None,
+    build_host: str | None,
     if_unfinished: bool,
 ) -> None:
-    await conn.execute(COMPLETE_ATTRIBUTE, build_id, attr, system, drv_path, status, error, cached, outputs, log_size, log_truncated, eval_warnings, eval_wall_ms, eval_alloc_bytes, if_unfinished)
+    await conn.execute(COMPLETE_ATTRIBUTE, build_id, attr, system, drv_path, status, error, cached, outputs, log_size, log_truncated, eval_warnings, eval_wall_ms, eval_alloc_bytes, eval_host, build_host, if_unfinished)
 
 
 async def claim_effect(conn: ConnectionLike, *, status: str, build_id: int, kind: str, name: str) -> int | None:

@@ -144,6 +144,9 @@ class AttributeResult:
     out_path: str | None = None
     drv_path: str | None = None
     system: str | None = None
+    # Machine that built the attribute's own derivation (None when it
+    # was not built, e.g. substituted or cached).
+    build_host: str | None = None
 
 
 @dataclass

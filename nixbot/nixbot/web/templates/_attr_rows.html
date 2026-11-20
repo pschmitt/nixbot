@@ -9,6 +9,9 @@
       {% else %}
         <code>{{ a.attr }}</code>
       {% endif %}
+      {% if a | attr_hosts %}
+        <span class="attr-hosts" title="{{ a | attr_hosts(full=True) }}">{{ a | attr_hosts }}</span>
+      {% endif %}
       {% if aw %}
         <ul class="attr-warnings">{% for w in aw %}<li>{{ w | ansi }}</li>{% endfor %}</ul>
       {% endif %}

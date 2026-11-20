@@ -177,23 +177,26 @@ WHERE build_id = $1 AND status IN ('pending', 'building')
 COMMIT_EVAL_RESULT: typing.Final[str] = """-- name: CommitEvalResult :exec
 WITH new_rows AS (
     INSERT INTO build_attributes (build_id, attr, system, drv_path, outputs,
-        eval_warnings, eval_wall_ms, eval_alloc_bytes, status)
+        eval_warnings, eval_wall_ms, eval_alloc_bytes, eval_host, status)
     SELECT $2::bigint, u.attr, u.system, u.drv_path, u.outputs,
-        NULLIF(u.eval_warnings, 'null'::jsonb), NULLIF(u.eval_wall_ms, -1), NULLIF(u.eval_alloc_bytes, -1), 'pending'
+        NULLIF(u.eval_warnings, 'null'::jsonb), NULLIF(u.eval_wall_ms, -1), NULLIF(u.eval_alloc_bytes, -1),
+        NULLIF(u.eval_host, ''), 'pending'
     FROM (SELECT unnest($3::text[]) AS attr,
                  unnest($4::text[]) AS system,
                  unnest($5::text[]) AS drv_path,
                  unnest($6::jsonb[]) AS outputs,
                  unnest($7::jsonb[]) AS eval_warnings,
                  unnest($8::int[]) AS eval_wall_ms,
-                 unnest($9::bigint[]) AS eval_alloc_bytes) u
+                 unnest($9::bigint[]) AS eval_alloc_bytes,
+                 unnest($10::text[]) AS eval_host) u
     ON CONFLICT (build_id, attr) DO UPDATE SET
         system = EXCLUDED.system,
         drv_path = EXCLUDED.drv_path,
         outputs = EXCLUDED.outputs,
         eval_warnings = EXCLUDED.eval_warnings,
         eval_wall_ms = EXCLUDED.eval_wall_ms,
-        eval_alloc_bytes = EXCLUDED.eval_alloc_bytes
+        eval_alloc_bytes = EXCLUDED.eval_alloc_bytes,
+        eval_host = EXCLUDED.eval_host
     WHERE build_attributes.status IN ('pending', 'building')
 ), pruned AS (
     DELETE FROM build_attributes WHERE build_id = $2
@@ -409,8 +412,9 @@ async def commit_eval_result(
     eval_warnings: collections.abc.Sequence[str],
     eval_wall_ms: collections.abc.Sequence[int],
     eval_alloc_bytes: collections.abc.Sequence[int],
+    eval_hosts: collections.abc.Sequence[str],
 ) -> None:
-    await conn.execute(COMMIT_EVAL_RESULT, eval_duration_ms, build_id, attrs, systems, drv_paths, outputs, eval_warnings, eval_wall_ms, eval_alloc_bytes)
+    await conn.execute(COMMIT_EVAL_RESULT, eval_duration_ms, build_id, attrs, systems, drv_paths, outputs, eval_warnings, eval_wall_ms, eval_alloc_bytes, eval_hosts)
 
 
 async def delete_attributes_by_name(conn: ConnectionLike, *, build_id: int, attrs: collections.abc.Sequence[str]) -> None:

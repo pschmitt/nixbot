@@ -204,7 +204,8 @@ WHERE b.status IN ('pending', 'evaluating', 'building')
 ORDER BY b.status = 'pending', b.id;
 
 -- name: AttributeStatus :one
-SELECT status, eval_wall_ms, eval_alloc_bytes FROM build_attributes
+SELECT status, eval_wall_ms, eval_alloc_bytes, eval_host, build_host
+FROM build_attributes
 WHERE build_id = $1 AND attr = $2;
 
 -- name: AttributeError :one

@@ -68,6 +68,8 @@ class _JobColumns:
     # -1 stands for NULL so the arrays stay int-typed for asyncpg.
     eval_wall_ms: list[int]
     eval_alloc_bytes: list[int]
+    # "" stands for NULL, like -1 above.
+    eval_hosts: list[str]
 
 
 def _job_columns(jobs: Sequence[NixEvalJob]) -> _JobColumns:
@@ -82,6 +84,7 @@ def _job_columns(jobs: Sequence[NixEvalJob]) -> _JobColumns:
         eval_alloc_bytes=[
             job.stats.alloc_bytes if job.stats else -1 for job in successes
         ],
+        eval_hosts=[job.eval_host or "" for job in successes],
     )
 
 
@@ -782,6 +785,9 @@ class _OrchestratorExecutor:
             out_path=None if job.build_dependencies_only else job.outputs.get("out"),
             drv_path=job.drv_path,
             system=job.system,
+            build_host=writer.capture.build_host(job.drv_path)
+            if writer.capture
+            else None,
         )
         await db.complete_attribute(
             self.o.pool,

@@ -33,6 +33,9 @@ class NixEvalJobError(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     traces: list[str] = Field(default_factory=list)
     stats: EvalStats | None = None
+    # Host that evaluated this attribute, when the evaluator reports it
+    # (a remote-evaluating nix-eval-jobs wrapper adds "evalHost").
+    eval_host: str | None = Field(default=None, validation_alias="evalHost")
 
 
 class NixEvalJobSuccess(BaseModel):
@@ -59,6 +62,8 @@ class NixEvalJobSuccess(BaseModel):
     # out path as "not statically known".
     outputs: dict[str, str | None]
     system: str
+    # See NixEvalJobError.eval_host.
+    eval_host: str | None = Field(default=None, validation_alias="evalHost")
     # hercules-ci build modifiers exported by the eval's --apply function
     # (buildDependenciesOnly, ignoreFailure, requireFailure).
     extra_value: dict[str, Any] | None = Field(

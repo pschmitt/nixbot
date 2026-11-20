@@ -113,6 +113,9 @@ class Attribute(BaseModel):
     # Per-attribute cost reported by nix-eval-jobs.
     eval_wall_ms: int | None = None
     eval_alloc_bytes: int | None = None
+    # Where the attribute was evaluated and its own derivation built.
+    eval_host: str | None = None
+    build_host: str | None = None
 
 
 class Effect(BaseModel):

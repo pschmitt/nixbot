@@ -89,6 +89,24 @@ def eval_stats(row: dict[str, Any]) -> str:
     return f"eval {format_ms(row['eval_wall_ms'])} · {format_bytes(row['eval_alloc_bytes'])} allocated"
 
 
+def _short_host(host: str) -> str:
+    """First DNS label, so rows stay compact; IP addresses stay whole."""
+    if ":" in host or host.replace(".", "").isdigit():
+        return host
+    return host.split(".", 1)[0]
+
+
+def attr_hosts(row: dict[str, Any], *, full: bool = False) -> str:
+    """Hosts of an attribute row as "eval HOST · build HOST"; parts
+    without a known host are left out, empty when neither is known."""
+    parts = []
+    for label, key in (("eval", "eval_host"), ("build", "build_host")):
+        host = row.get(key)
+        if host:
+            parts.append(f"{label} {host if full else _short_host(host)}")
+    return " · ".join(parts)
+
+
 def _forge_base(project: dict[str, Any]) -> str | None:
     """Web URL base for forge links, or None for pull_based projects
     with a non-http clone URL (an SSH remote makes no valid href)."""
@@ -165,6 +183,7 @@ def make_env() -> Environment:
     env.filters["eval_ms"] = format_ms
     env.filters["human_bytes"] = format_bytes
     env.filters["eval_stats"] = eval_stats
+    env.filters["attr_hosts"] = attr_hosts
     env.filters["excerpt"] = excerpt
     env.filters["plain"] = strip_ansi
     # asyncpg returns jsonb columns as text.

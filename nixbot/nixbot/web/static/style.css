@@ -189,6 +189,13 @@ td.attr-name {
 td.attr-name a {
 	color: var(--fg);
 }
+/* Where the attribute was evaluated and built. */
+.attr-hosts {
+	margin-left: 0.5rem;
+	font-size: 0.78rem;
+	color: var(--muted);
+	white-space: nowrap;
+}
 td.attr-status,
 td.attr-duration {
 	white-space: nowrap;
