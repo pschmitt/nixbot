@@ -910,10 +910,19 @@ async def test_pr_build_start_is_queued() -> None:
     build: Any = SimpleNamespace(id_=15, project_id=3)
     event: Any = SimpleNamespace(pr_number=7, actor="github:alice", commit_sha="abc")
     await wrapper.build_started(event, build)
-    service.enqueue_work.assert_awaited_once_with(
-        "deliver", "deliver-3-pr-7",
-        {"kind": "build_started", "build_id": 15, "actor": "github:alice",
-         "pr_number": 7, "rev": "abc"},
+    # The PR status comment is queued next to the delivery.
+    kinds = [c.args[0] for c in service.enqueue_work.await_args_list]
+    assert sorted(kinds) == ["deliver", "pr-status"]
+    service.enqueue_work.assert_any_await(
+        "deliver",
+        "deliver-3-pr-7",
+        {
+            "kind": "build_started",
+            "build_id": 15,
+            "actor": "github:alice",
+            "pr_number": 7,
+            "rev": "abc",
+        },
     )
     service.enqueue_work.reset_mock()
     event.pr_number = None

@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 from fnmatch import fnmatch
 from typing import TYPE_CHECKING, Any
 
-from . import approval, db, discovery, restart_dispatch, schedule_runner
+from . import approval, db, discovery, pr_status, restart_dispatch, schedule_runner
 from .config import ScheduleWhen
 from .db import BuildStatus
 from .db_gen import approvals as approvals_q
@@ -120,8 +120,28 @@ class RetryingReporter:
     inner: StatusReporter
     service: CIService
 
+    async def _queue_pr_status(
+        self, event: ChangeEvent, build: BuildRecord, *, delay: float = 0
+    ) -> None:
+        """Ask for the PR's status comment to be refreshed from the build's
+        current state. Never fails the caller: the build outranks its comment."""
+        if event.pr_number is None:
+            return
+        try:
+            await self.service.enqueue_work(
+                pr_status.WORK_KIND,
+                pr_status.dedup_key(build.project_id, event.pr_number),
+                pr_status.PrStatusItem(
+                    build.id_, event.pr_number, event.commit_sha
+                ).as_payload(),
+                delay=delay,
+            )
+        except Exception:
+            logger.exception("pr status enqueue failed", extra={"build_id": build.id_})
+
     async def build_started(self, event: ChangeEvent, build: BuildRecord) -> None:
         await self.inner.build_started(event, build)
+        await self._queue_pr_status(event, build, delay=pr_status.START_DELAY_SECONDS)
         if event.pr_number is not None:
             await self.service.enqueue_work(
                 "deliver",
@@ -147,6 +167,7 @@ class RetryingReporter:
         self, event: ChangeEvent, build: BuildRecord, attr: str | None
     ) -> None:
         await self.inner.build_restarted(event, build, attr)
+        await self._queue_pr_status(event, build, delay=pr_status.START_DELAY_SECONDS)
 
     async def effect_started(
         self, event: ChangeEvent, build: BuildRecord, name: str
@@ -202,6 +223,7 @@ class RetryingReporter:
                     self.service.config.work_retry_backoff,
                 ),
             )
+        await self._queue_pr_status(event, build)
 
 
 @dataclass
@@ -682,7 +704,7 @@ class CIService:
             # A deferred same-key item may be claimable now.
             self._work_event.set()
 
-    async def _dispatch_work(self, item: WorkItem) -> None:
+    async def _dispatch_work(self, item: WorkItem) -> None:  # noqa: C901
         payload = item.payload
         if item.kind == "change":
             await self._process_change(
@@ -712,6 +734,8 @@ class CIService:
                 Delivery(**payload),
                 last_attempt=item.attempts + 1 >= MAX_WORK_ATTEMPTS,
             )
+        elif item.kind == pr_status.WORK_KIND:
+            await pr_status.update_comment(self, payload)
         elif item.kind == "report":
             await self._re_report(payload["build_id"])
         elif item.kind == "refresh-schedules":
