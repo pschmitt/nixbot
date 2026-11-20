@@ -230,6 +230,14 @@ SANDBOX_ETC_PATHS = (
 )
 
 
+def deployment_ro_paths() -> list[Path]:
+    """Read-only binds the deployment adds to every eval sandbox
+    (NIXBOT_EVAL_EXTRA_RO_PATHS, colon-separated), e.g. the ssh-agent
+    socket directory of a remote-evaluating nix-eval-jobs wrapper."""
+    raw = os.environ.get("NIXBOT_EVAL_EXTRA_RO_PATHS", "")
+    return [Path(path) for path in raw.split(":") if path]
+
+
 def build_sandbox_command(worktree_path: Path, settings: EvalSettings) -> list[str]:
     """bwrap wrapper: worktree + nix store + gc-roots dir + daemon socket
     + per-build credential file only. Never $CREDENTIALS_DIRECTORY."""
@@ -296,7 +304,11 @@ def build_sandbox_command(worktree_path: Path, settings: EvalSettings) -> list[s
         "--chdir",
         str(worktree_path),
     ]
-    for path in (*map(Path, SANDBOX_ETC_PATHS), *settings.extra_ro_paths):
+    for path in (
+        *map(Path, SANDBOX_ETC_PATHS),
+        *settings.extra_ro_paths,
+        *deployment_ro_paths(),
+    ):
         if path.exists():
             cmd += ["--ro-bind", str(path), str(path)]
     if settings.netrc_file is not None:
