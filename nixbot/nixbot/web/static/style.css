@@ -196,6 +196,32 @@ td.attr-name a {
 	color: var(--muted);
 	white-space: nowrap;
 }
+.attr-live {
+	margin-left: 0.5rem;
+	font-size: 0.78rem;
+	white-space: nowrap;
+}
+td.build-hosts,
+th.build-hosts {
+	font-size: 0.78rem;
+	color: var(--muted);
+	white-space: nowrap;
+}
+.builder-builds {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+	font-size: 0.85rem;
+}
+.builder-builds li + li {
+	margin-top: 0.2rem;
+}
+@media (max-width: 50rem) {
+	td.build-hosts,
+	th.build-hosts {
+		display: none;
+	}
+}
 td.attr-status,
 td.attr-duration {
 	white-space: nowrap;

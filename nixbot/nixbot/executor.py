@@ -496,6 +496,30 @@ def machine_host(machine: str) -> str:
     return rest.split(":", 1)[0]
 
 
+def short_host(host: str) -> str:
+    """First DNS label (rofl-15.example.org -> rofl-15), so hosts read
+    the same wherever they come from; IP addresses stay whole."""
+    if ":" in host or host.replace(".", "").isdigit():
+        return host
+    return host.split(".", 1)[0]
+
+
+def local_host() -> str:
+    """This host's short name: what a local build (empty machineName)
+    is attributed to."""
+    return short_host(socket.gethostname())
+
+
+@dataclass(frozen=True)
+class ActiveBuild:
+    """A derivation nix is currently running a builder for."""
+
+    drv_path: str
+    name: str
+    host: str
+    started: float  # epoch seconds
+
+
 def _drv_display_name(drv_path: str) -> str:
     name = drv_path.rsplit("/", 1)[-1].removesuffix(".drv")
     _, _, name = name.partition("-")  # drop the store hash
@@ -539,6 +563,8 @@ class StructuredCapture:
         self._on_built = on_built
         # drv -> machine of its build activity ("" = this host).
         self._machines: dict[str, str] = {}
+        # drv -> when its build activity started (epoch seconds).
+        self._started: dict[str, float] = {}
         self._w.register(self.SETUP, "setup")
 
     def _ts(self) -> int:
@@ -604,6 +630,7 @@ class StructuredCapture:
     def start_build(self, act_id: int, drv_path: str, machine: str = "") -> None:
         self._act[act_id] = drv_path
         self._machines[drv_path] = machine
+        self._started[drv_path] = self._clock()
         name = _drv_display_name(drv_path)
         self._w.register(drv_path, name)
         if drv_path not in self._idx:
@@ -737,7 +764,28 @@ class StructuredCapture:
         never started a build for it (substituted, already valid)."""
         if drv_path not in self._machines:
             return None
-        return machine_host(self._machines[drv_path]) or socket.gethostname()
+        return self._host_of(drv_path)
+
+    def _host_of(self, drv_path: str) -> str:
+        host = machine_host(self._machines.get(drv_path, ""))
+        return short_host(host) if host else local_host()
+
+    def active_builds(self) -> list[ActiveBuild]:
+        """Builds running right now (started, not yet stopped), oldest
+        first: the live "building X on HOST" of the web UI."""
+        return sorted(
+            (
+                ActiveBuild(
+                    drv_path=drv,
+                    name=_drv_display_name(drv),
+                    host=self._host_of(drv),
+                    started=self._started.get(drv, 0.0),
+                )
+                for drv in self._running
+                if drv in self._machines
+            ),
+            key=lambda b: (b.started, b.drv_path),
+        )
 
 
 def _feed_capture(event: Any, capture: StructuredCapture) -> None:

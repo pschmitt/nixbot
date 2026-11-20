@@ -107,6 +107,31 @@ def attr_hosts(row: dict[str, Any], *, full: bool = False) -> str:
     return " · ".join(parts)
 
 
+def build_hosts(build: dict[str, Any]) -> str:
+    """Builders column of a build row: "eval A, B · build C"; parts
+    without hosts are left out, empty when nothing is known."""
+    hosts = build.get("hosts") or {}
+    parts = [
+        f"{label} {', '.join(_short_host(h) for h in hosts[key])}"
+        for label, key in (("eval", "eval"), ("build", "build"))
+        if hosts.get(key)
+    ]
+    return " · ".join(parts)
+
+
+def live_build_text(active: list[Any]) -> str:
+    """ "building NAME on HOST", "+N more" for parallel builders."""
+    if not active:
+        return ""
+    first = active[0]
+    text = f"building {first.name} on {first.host}"
+    return f"{text} +{len(active) - 1} more" if len(active) > 1 else text
+
+
+def live_build_title(active: list[Any]) -> str:
+    return "\n".join(f"{a.name} on {a.host}" for a in active)
+
+
 def _forge_base(project: dict[str, Any]) -> str | None:
     """Web URL base for forge links, or None for pull_based projects
     with a non-http clone URL (an SSH remote makes no valid href)."""
@@ -184,6 +209,11 @@ def make_env() -> Environment:
     env.filters["human_bytes"] = format_bytes
     env.filters["eval_stats"] = eval_stats
     env.filters["attr_hosts"] = attr_hosts
+    env.filters["build_hosts"] = build_hosts
+    env.filters["live_build_text"] = live_build_text
+    env.filters["live_build_title"] = live_build_title
+    # Replaced by create_app with the process's live registry.
+    env.globals["live_builds"] = lambda _build_id, _attr: []
     env.filters["excerpt"] = excerpt
     env.filters["plain"] = strip_ansi
     # asyncpg returns jsonb columns as text.

@@ -14,6 +14,11 @@
   {# throttle, not delay: delay debounces, so a busy build's event
      stream keeps resetting it and the refetch never fires. #}
   {% set trigger = "status from:body throttle:1s, htmx:sse:after:connection from:body" %}
+  {# A long build sends no status events: refresh every 10s while
+     attributes build, so their live "building X on HOST" stays current. #}
+  {% if progress.building %}
+    {% set trigger = trigger ~ ", every 10s" %}
+  {% endif %}
   {# hx-include: an SSE refetch keeps an active attribute search. #}
   <main id="main"
         hx-get="{{ build_path(project, build.number) }}"

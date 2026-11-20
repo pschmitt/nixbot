@@ -23,13 +23,17 @@ __all__: collections.abc.Sequence[str] = (
     "WebAttributeCountsRow",
     "WebAttributeHistoryRow",
     "WebAttributeNeighborNumbersRow",
+    "WebBuildHostsRow",
+    "WebBuildRefsRow",
     "WebBuildsForRepoRow",
+    "WebEvalHostCountsRow",
     "WebEvalStatsRow",
     "WebNeighborNumbersRow",
     "WebProjectEffectCountsRow",
     "WebProjectEffectsRow",
     "WebQueueRow",
     "WebRecentBuildsRow",
+    "WebRecentEvalsRow",
     "WebRepoOverviewRow",
     "attribute_error",
     "attribute_status",
@@ -55,8 +59,11 @@ __all__: collections.abc.Sequence[str] = (
     "web_attributes",
     "web_attributes_finished_after",
     "web_build_by_number",
+    "web_build_hosts",
+    "web_build_refs",
     "web_builds_for_repo",
     "web_effects",
+    "web_eval_host_counts",
     "web_eval_stats",
     "web_latest_build_status",
     "web_neighbor_numbers",
@@ -66,6 +73,7 @@ __all__: collections.abc.Sequence[str] = (
     "web_projects",
     "web_queue",
     "web_recent_builds",
+    "web_recent_evals",
     "web_repo",
     "web_repo_by_badge_token",
     "web_repo_candidates",
@@ -389,6 +397,45 @@ class WebProjectEffectsRow:
 class WebProjectEffectCountsRow:
     status: str
     count: int
+
+
+@dataclasses.dataclass()
+class WebBuildHostsRow:
+    build_id: int
+    eval_hosts: collections.abc.Sequence[str]
+    build_hosts: collections.abc.Sequence[str]
+
+
+@dataclasses.dataclass()
+class WebBuildRefsRow:
+    id_: int
+    number: int
+    status: str
+    project_id: int
+    forge: str
+    owner: str
+    name: str
+
+
+@dataclasses.dataclass()
+class WebRecentEvalsRow:
+    id_: int
+    number: int
+    status: str
+    created_at: datetime.datetime
+    started_at: datetime.datetime | None
+    eval_duration_ms: int | None
+    project_id: int
+    forge: str
+    owner: str
+    name: str
+
+
+@dataclasses.dataclass()
+class WebEvalHostCountsRow:
+    build_id: int
+    eval_host: str | None
+    jobs: int
 
 
 WEB_PROJECTS: typing.Final[str] = """-- name: WebProjects :many
@@ -737,6 +784,40 @@ WHERE status IN ('failed', 'dependency_failed')
 
 WEB_LATEST_BUILD_STATUS: typing.Final[str] = """-- name: WebLatestBuildStatus :one
 SELECT status FROM builds WHERE project_id = $1 ORDER BY number DESC LIMIT 1
+"""
+
+WEB_BUILD_HOSTS: typing.Final[str] = """-- name: WebBuildHosts :many
+SELECT a.build_id,
+       COALESCE(array_agg(DISTINCT a.eval_host ORDER BY a.eval_host)
+                FILTER (WHERE a.eval_host IS NOT NULL), '{}')::text[] AS eval_hosts,
+       COALESCE(array_agg(DISTINCT a.build_host ORDER BY a.build_host)
+                FILTER (WHERE a.build_host IS NOT NULL), '{}')::text[] AS build_hosts
+FROM build_attributes a
+WHERE a.build_id = ANY($1::bigint[])
+GROUP BY a.build_id
+"""
+
+WEB_BUILD_REFS: typing.Final[str] = """-- name: WebBuildRefs :many
+SELECT b.id, b.number, b.status, b.project_id, p.forge, p.owner, p.name
+FROM builds b JOIN projects p ON p.id = b.project_id
+WHERE b.id = ANY($1::bigint[])
+"""
+
+WEB_RECENT_EVALS: typing.Final[str] = """-- name: WebRecentEvals :many
+SELECT b.id, b.number, b.status, b.created_at, b.started_at,
+       b.eval_duration_ms, b.project_id, p.forge, p.owner, p.name
+FROM builds b JOIN projects p ON p.id = b.project_id
+WHERE (b.status = 'evaluating' OR b.eval_duration_ms IS NOT NULL)
+  AND ($1::bigint[] IS NULL OR b.project_id = ANY($1))
+ORDER BY b.id DESC LIMIT $2::bigint
+"""
+
+WEB_EVAL_HOST_COUNTS: typing.Final[str] = """-- name: WebEvalHostCounts :many
+SELECT a.build_id, a.eval_host, count(*) AS jobs
+FROM build_attributes a
+WHERE a.build_id = ANY($1::bigint[]) AND a.eval_host IS NOT NULL
+GROUP BY a.build_id, a.eval_host
+ORDER BY a.build_id, a.eval_host
 """
 
 
@@ -1313,3 +1394,31 @@ async def web_latest_build_status(conn: ConnectionLike, *, project_id: int) -> s
     if row is None:
         return None
     return row[0]
+
+
+def web_build_hosts(conn: ConnectionLike, *, build_ids: collections.abc.Sequence[int]) -> QueryResults[WebBuildHostsRow]:
+    def _decode_hook(row: asyncpg.Record) -> WebBuildHostsRow:
+        return WebBuildHostsRow(build_id=row[0], eval_hosts=row[1], build_hosts=row[2])
+
+    return QueryResults(conn, WEB_BUILD_HOSTS, _decode_hook, build_ids)
+
+
+def web_build_refs(conn: ConnectionLike, *, build_ids: collections.abc.Sequence[int]) -> QueryResults[WebBuildRefsRow]:
+    def _decode_hook(row: asyncpg.Record) -> WebBuildRefsRow:
+        return WebBuildRefsRow(id_=row[0], number=row[1], status=row[2], project_id=row[3], forge=row[4], owner=row[5], name=row[6])
+
+    return QueryResults(conn, WEB_BUILD_REFS, _decode_hook, build_ids)
+
+
+def web_recent_evals(conn: ConnectionLike, *, project_ids: collections.abc.Sequence[int] | None, limit_: int) -> QueryResults[WebRecentEvalsRow]:
+    def _decode_hook(row: asyncpg.Record) -> WebRecentEvalsRow:
+        return WebRecentEvalsRow(id_=row[0], number=row[1], status=row[2], created_at=row[3], started_at=row[4], eval_duration_ms=row[5], project_id=row[6], forge=row[7], owner=row[8], name=row[9])
+
+    return QueryResults(conn, WEB_RECENT_EVALS, _decode_hook, project_ids, limit_)
+
+
+def web_eval_host_counts(conn: ConnectionLike, *, build_ids: collections.abc.Sequence[int]) -> QueryResults[WebEvalHostCountsRow]:
+    def _decode_hook(row: asyncpg.Record) -> WebEvalHostCountsRow:
+        return WebEvalHostCountsRow(build_id=row[0], eval_host=row[1], jobs=row[2])
+
+    return QueryResults(conn, WEB_EVAL_HOST_COUNTS, _decode_hook, build_ids)

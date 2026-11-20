@@ -15,6 +15,7 @@ Visibility filtering hooks (`visible_repo_ids`) are wired by task
 from __future__ import annotations
 
 import json
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -38,6 +39,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from nixbot.effects_state import TaskTokens
 
 from ..auth import User, can_control_build, is_admin  # noqa: TID252
+from ..builders import BuildersSource, evaluators  # noqa: TID252
 from ..db_gen import approvals as approvals_q  # noqa: TID252
 from ..forge_tokens import RevokedSessionStore  # noqa: TID252
 from ..recovery import check_db_health  # noqa: TID252
@@ -94,6 +96,8 @@ ATTR_GROUPS: dict[str, tuple[str, ...]] = {
     "ignored": ("ignored_failure",),
 }
 INLINE_GROUPS = ("failed", "building")
+# Latest evaluations on the builders page.
+EVALS_SHOWN = 10
 
 
 def _by_group(per_status: dict[str, int]) -> dict[str, int]:
@@ -134,6 +138,25 @@ class WebContext:
         self.proxy_auth_header: str | None = None
         # Wired by bootstrap. Effects post PR comments through it.
         self.forge_pr: ForgePrClient | None = None
+        # Live builds of this process (wired by create_app).
+        self.log_registry: LogRegistry = LogRegistry()
+        self.builders_source = BuildersSource()
+
+    async def attach_build_hosts(self, builds: list[dict[str, Any]]) -> None:
+        """Set build["hosts"] = {"eval": [...], "build": [...]}: the
+        distinct hosts over the build's attributes (one query for the
+        page), plus the machines running its builders right now."""
+        hosts = await self.queries.build_hosts([b["id"] for b in builds])
+        for b in builds:
+            h = hosts.get(b["id"], {"eval": [], "build": []})
+            if b.get("status") == "building":
+                h = {
+                    "eval": h["eval"],
+                    "build": sorted(
+                        {*h["build"], *self.log_registry.live_hosts(b["id"])}
+                    ),
+                }
+            b["hosts"] = h
 
     async def can_control(self, request: Request, build: dict[str, Any]) -> bool:
         """Whether the requester may restart/cancel this build (drives
@@ -321,6 +344,7 @@ class _PageRoutes:
         builds = await ctx.queries.recent_builds(
             limit=PAGE_SIZE + 1, project_ids=visible
         )
+        await ctx.attach_build_hosts(builds[:PAGE_SIZE])
         return await ctx.render(
             "activity.html",
             request=request,
@@ -342,6 +366,7 @@ class _PageRoutes:
         builds = await ctx.queries.recent_builds(
             limit=limit + 1, project_ids=visible, before=before
         )
+        await ctx.attach_build_hosts(builds[:limit])
         return await ctx.render(
             "_build_rows.html",
             request=request,
@@ -391,6 +416,7 @@ class _PageRoutes:
             page=page,
             filters=BuildFilters.for_ref(ref, status=status),
         )
+        await ctx.attach_build_hosts(builds.items)
         return await ctx.render(
             "repo.html",
             request=request,
@@ -474,6 +500,7 @@ class _PageRoutes:
             limit=limit,
             filters=BuildFilters.for_ref(ref, status=status or None, before=before),
         )
+        await ctx.attach_build_hosts(builds.items)
         return await ctx.render(
             "_build_rows.html",
             request=request,
@@ -774,6 +801,60 @@ class _PageRoutes:
             headers={"Cache-Control": "max-age=60"},
         )
 
+    async def builders_page(self, request: Request) -> HTMLResponse:
+        """Build machines and evaluation hosts with what each runs now.
+        Builds of repos the viewer may not see count, but are not named."""
+        ctx = self.ctx
+        visible = await ctx.visible_repo_ids(request)
+        now = time.time()
+        live = ctx.log_registry.all_active()
+        refs = await ctx.queries.build_refs(sorted({b_id for b_id, _, _ in live}))
+        by_host: dict[str, list[dict[str, Any]]] = {}
+        for build_id, attr, active in live:
+            ref = refs.get(build_id)
+            shown = ref is not None and (
+                visible is None or ref["project_id"] in visible
+            )
+            by_host.setdefault(active.host, []).append(
+                {
+                    "name": active.name,
+                    "attr": attr if shown else None,
+                    "ref": ref if shown else None,
+                    "seconds": max(now - active.started, 0),
+                }
+            )
+        machines = await ctx.builders_source.machines()
+        known = {m.host for m in machines}
+        evals = await ctx.queries.recent_evals(visible, limit=EVALS_SHOWN)
+        counts = await ctx.queries.eval_host_counts([e["id"] for e in evals])
+        evaluator_jobs: dict[str, int] = {}
+        for e in evals:
+            e["hosts"] = counts.get(e["id"], [])
+            for host, jobs in e["hosts"]:
+                evaluator_jobs[host] = evaluator_jobs.get(host, 0) + jobs
+        hosts = evaluators()
+        return await ctx.render(
+            "builders.html",
+            request=request,
+            machines=[
+                {
+                    "machine": m,
+                    "builds": sorted(
+                        by_host.get(m.host, []), key=lambda b: -b["seconds"]
+                    ),
+                }
+                for m in machines
+            ],
+            # Builders nix used that the machines list no longer has
+            # (a pool worker that was just removed).
+            unlisted={h: b for h, b in by_host.items() if h not in known},
+            evaluators=[
+                {"host": h, "jobs": evaluator_jobs.get(h, 0)}
+                for h in [*hosts, *sorted(set(evaluator_jobs) - set(hosts))]
+            ],
+            evals=evals,
+        )
+
     async def health(self) -> PlainTextResponse:
         if not await check_db_health(self.ctx.pool):
             return PlainTextResponse("database unavailable", status_code=503)
@@ -791,6 +872,7 @@ def create_router(ctx: WebContext) -> APIRouter:
         ("/builds", pages.activity),
         ("/builds/rows", pages.activity_rows),
         ("/builds/queue", pages.queue_fragment),
+        ("/builders", pages.builders_page),
         ("/repos/{forge}/{owner:owner}/{name:segment}", pages.repo_page),
         ("/repos/{forge}/{owner:owner}/{name:segment}/rows", pages.repo_rows),
         (
@@ -931,6 +1013,9 @@ def create_app(
     app.include_router(create_router(ctx), include_in_schema=False)
     registry = log_registry or LogRegistry()
     app.state.log_registry = registry
+    ctx.log_registry = registry
+    # "building X on HOST" of running attribute rows.
+    ctx.env.globals["live_builds"] = registry.active_builds
     app.include_router(create_log_router(ctx, registry), include_in_schema=False)
     app.include_router(create_log_api_router(ctx, registry))
     app.include_router(create_metrics_router(pool), include_in_schema=False)

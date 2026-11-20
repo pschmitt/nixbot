@@ -328,3 +328,37 @@ WHERE status IN ('failed', 'dependency_failed');
 
 -- name: WebLatestBuildStatus :one
 SELECT status FROM builds WHERE project_id = $1 ORDER BY number DESC LIMIT 1;
+
+-- name: WebBuildHosts :many
+-- Distinct eval and build hosts per build, for a page of build rows.
+SELECT a.build_id,
+       COALESCE(array_agg(DISTINCT a.eval_host ORDER BY a.eval_host)
+                FILTER (WHERE a.eval_host IS NOT NULL), '{}')::text[] AS eval_hosts,
+       COALESCE(array_agg(DISTINCT a.build_host ORDER BY a.build_host)
+                FILTER (WHERE a.build_host IS NOT NULL), '{}')::text[] AS build_hosts
+FROM build_attributes a
+WHERE a.build_id = ANY(sqlc.arg(build_ids)::bigint[])
+GROUP BY a.build_id;
+
+-- name: WebBuildRefs :many
+-- Link targets (project and number) of builds the builders page shows.
+SELECT b.id, b.number, b.status, b.project_id, p.forge, p.owner, p.name
+FROM builds b JOIN projects p ON p.id = b.project_id
+WHERE b.id = ANY(sqlc.arg(build_ids)::bigint[]);
+
+-- name: WebRecentEvals :many
+-- Running evaluations plus the latest finished ones, newest first.
+SELECT b.id, b.number, b.status, b.created_at, b.started_at,
+       b.eval_duration_ms, b.project_id, p.forge, p.owner, p.name
+FROM builds b JOIN projects p ON p.id = b.project_id
+WHERE (b.status = 'evaluating' OR b.eval_duration_ms IS NOT NULL)
+  AND (sqlc.narg(project_ids)::bigint[] IS NULL OR b.project_id = ANY(sqlc.narg(project_ids)))
+ORDER BY b.id DESC LIMIT sqlc.arg(limit_)::bigint;
+
+-- name: WebEvalHostCounts :many
+-- Jobs per evaluation host for each of the given builds.
+SELECT a.build_id, a.eval_host, count(*) AS jobs
+FROM build_attributes a
+WHERE a.build_id = ANY(sqlc.arg(build_ids)::bigint[]) AND a.eval_host IS NOT NULL
+GROUP BY a.build_id, a.eval_host
+ORDER BY a.build_id, a.eval_host;

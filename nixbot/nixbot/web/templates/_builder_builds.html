@@ -1,0 +1,17 @@
+{# Running builds of one machine: row.builds from the live registry. #}
+{% if row.builds %}
+  <ul class="builder-builds">
+    {% for b in row.builds %}
+      <li>
+        <code>{{ b.name }}</code>
+        {% if b.ref %}
+          <a class="muted"
+             href="{{ build_path(b.ref, b.ref.number) }}/logs/{{ b.attr | urlencode }}">{{ repo_name(b.ref.owner, b.ref.name) }} #{{ b.ref.number }}</a>
+        {% endif %}
+        <span class="muted">{{ b.seconds | duration_secs }}</span>
+      </li>
+    {% endfor %}
+  </ul>
+{% else %}
+  <span class="muted">idle</span>
+{% endif %}

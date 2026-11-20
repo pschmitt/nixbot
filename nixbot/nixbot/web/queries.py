@@ -319,3 +319,39 @@ class WebQueries:
                 "position": positions.get(b["id"]),
                 "blocked_by": blocked_by,
             }
+
+    async def build_hosts(
+        self, build_ids: list[int]
+    ) -> dict[int, dict[str, list[str]]]:
+        """Distinct eval and build hosts per build: one query for a
+        whole page of build rows."""
+        if not build_ids:
+            return {}
+        rows = await gen.web_build_hosts(self.pool, build_ids=build_ids)
+        return {
+            r.build_id: {"eval": list(r.eval_hosts), "build": list(r.build_hosts)}
+            for r in rows
+        }
+
+    async def build_refs(self, build_ids: list[int]) -> dict[int, dict[str, Any]]:
+        if not build_ids:
+            return {}
+        rows = await gen.web_build_refs(self.pool, build_ids=build_ids)
+        return {r["id"]: r for r in _dicts(rows)}
+
+    async def recent_evals(
+        self, project_ids: list[int] | None, limit: int = 10
+    ) -> list[dict[str, Any]]:
+        return _dicts(
+            await gen.web_recent_evals(self.pool, project_ids=project_ids, limit_=limit)
+        )
+
+    async def eval_host_counts(
+        self, build_ids: list[int]
+    ) -> dict[int, list[tuple[str, int]]]:
+        if not build_ids:
+            return {}
+        out: dict[int, list[tuple[str, int]]] = {}
+        for r in await gen.web_eval_host_counts(self.pool, build_ids=build_ids):
+            out.setdefault(r.build_id, []).append((r.eval_host, r.jobs))
+        return out

@@ -13,6 +13,7 @@
 {% if "project_name" in b %}<td>{{ repo_name(b.owner, b.project_name) }}</td>{% endif %}
 <td>{{ ref_link(row, b) }}</td>
 <td>{{ commit_link(row, b.commit_sha) }}</td>
+<td class="build-hosts" title="{{ b | build_hosts }}">{{ b | build_hosts }}</td>
 <td>{{ ago(b.created_at) }}</td>
 <td>{{ b | duration }}</td>
 </tr>

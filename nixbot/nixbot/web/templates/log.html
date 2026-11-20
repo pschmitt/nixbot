@@ -17,6 +17,12 @@
             {% if attr_row | attr_hosts %}
               · <span title="{{ attr_row | attr_hosts(full=True) }}">{{ attr_row | attr_hosts }}</span>
             {% endif %}
+            {% if attr_status == "building" %}
+              {% set live = live_builds(build.id, attr) %}
+              {% if live %}
+                · <span class="attr-live" title="{{ live | live_build_title }}">{{ live | live_build_text }}</span>
+              {% endif %}
+            {% endif %}
             {% if prev_number %}
               · <a href="{{ build_path(project, prev_number) }}/logs/{{ attr | urlencode }}"
     rel="prev">‹ #{{ prev_number }}</a>

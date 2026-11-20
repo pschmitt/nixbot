@@ -3,12 +3,16 @@ and rendering."""
 
 from __future__ import annotations
 
-import socket
 from typing import TYPE_CHECKING
 
 from nixbot import build_run, db
 from nixbot.build_scheduler import AttributeResult, AttributeStatus
-from nixbot.executor import StructuredCapture, machine_host, render_log_event
+from nixbot.executor import (
+    StructuredCapture,
+    local_host,
+    machine_host,
+    render_log_event,
+)
 from nixbot.models import NixEvalJobError, NixEvalJobSuccess
 from nixbot.web.templating import attr_hosts
 
@@ -43,9 +47,10 @@ def test_capture_build_host_from_build_activity() -> None:
         activities,
         cap,
     )
-    assert cap.build_host("/nix/store/aaa-top.drv") == "rofl-15.brkn.lol"
+    # Short host names, like the wrapper's evalHost.
+    assert cap.build_host("/nix/store/aaa-top.drv") == "rofl-15"
     # A local build reports no machine: this host built it.
-    assert cap.build_host("/nix/store/bbb-dep.drv") == socket.gethostname()
+    assert cap.build_host("/nix/store/bbb-dep.drv") == local_host()
     # Never built here (substituted, already valid).
     assert cap.build_host("/nix/store/ccc-cached.drv") is None
 

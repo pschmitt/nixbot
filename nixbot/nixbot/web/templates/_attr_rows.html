@@ -12,6 +12,12 @@
       {% if a | attr_hosts %}
         <span class="attr-hosts" title="{{ a | attr_hosts(full=True) }}">{{ a | attr_hosts }}</span>
       {% endif %}
+      {% if a.status == "building" %}
+        {% set live = live_builds(build.id, a.attr) %}
+        {% if live %}
+          <span class="attr-live" title="{{ live | live_build_title }}">{{ live | live_build_text }}</span>
+        {% endif %}
+      {% endif %}
       {% if aw %}
         <ul class="attr-warnings">{% for w in aw %}<li>{{ w | ansi }}</li>{% endfor %}</ul>
       {% endif %}

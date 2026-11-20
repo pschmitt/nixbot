@@ -49,7 +49,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Iterable
     from pathlib import Path
 
-    from ..executor import LogWriter, StructuredCapture  # noqa: TID252
+    from ..executor import ActiveBuild, LogWriter, StructuredCapture  # noqa: TID252
     from .app import WebContext
 
 
@@ -78,6 +78,33 @@ class LogRegistry:
 
     def get_effect(self, run_id: int) -> LogWriter | None:
         return self._effects.get(run_id)
+
+    def active_builds(self, build_id: int, attr: str) -> list[ActiveBuild]:
+        """Derivations the attribute's nix build is running right now."""
+        writer = self._writers.get((build_id, attr))
+        capture = writer.capture if writer else None
+        return capture.active_builds() if capture else []
+
+    def all_active(self) -> list[tuple[int, str, ActiveBuild]]:
+        """Every running derivation of every attribute in this process,
+        as (build id, attribute, build): the builders page's live view."""
+        return [
+            (build_id, attr, active)
+            for (build_id, attr), writer in list(self._writers.items())
+            if writer.capture is not None
+            for active in writer.capture.active_builds()
+        ]
+
+    def live_hosts(self, build_id: int) -> list[str]:
+        """Hosts running a builder for any attribute of the build."""
+        return sorted(
+            {
+                active.host
+                for (b_id, _), writer in list(self._writers.items())
+                if b_id == build_id and writer.capture is not None
+                for active in writer.capture.active_builds()
+            }
+        )
 
 
 _COLOR_CLASSES = {}

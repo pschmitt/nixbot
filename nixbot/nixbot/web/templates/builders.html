@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+{% from "_macros.html" import status_icon, ago %}
+{% block title %}
+  builders
+{% endblock title %}
+{% block body %}
+  {# Live view: re-rendered every 10s (the registry has no events). #}
+  <main id="main"
+        hx-get="/builders"
+        hx-select="#main"
+        hx-swap="outerMorph"
+        hx-trigger="every 10s">
+    <section class="content">
+      <h2 class="section">Builders</h2>
+      <div class="table-scroll">
+        <table class="builds builders">
+          <caption class="visually-hidden">build machines and their running builds</caption>
+          <thead>
+            <tr>
+              <th scope="col">machine</th>
+              <th scope="col">kind</th>
+              <th scope="col">slots</th>
+              <th scope="col" class="build-hosts">systems</th>
+              <th scope="col">building now</th>
+            </tr>
+          </thead>
+          {% for row in machines %}
+            {% set m = row.machine %}
+            <tr id="machine-{{ m.host }}">
+              <td>
+                <code title="{{ m.uri }}">{{ m.host }}</code>
+              </td>
+              <td class="muted">{{ "pool worker" if m.kind == "pool" else m.kind }}</td>
+              <td class="{{ 'muted' if not row.builds }}">{{ row.builds | length }} / {{ m.max_jobs }}</td>
+              <td class="build-hosts muted"
+                  title="{{ m.supported_features | join(', ') }}">{{ m.systems | join(", ") or "–" }}</td>
+              <td>{% include "_builder_builds.html" %}</td>
+            </tr>
+          {% endfor %}
+          {% for host, builds in unlisted.items() %}
+            <tr id="machine-{{ host }}">
+              <td>
+                <code>{{ host }}</code>
+              </td>
+              <td class="muted">removed</td>
+              <td>{{ builds | length }}</td>
+              <td class="build-hosts muted">–</td>
+              <td>
+                {% with row = {"builds": builds} %}
+                  {% include "_builder_builds.html" %}
+                {% endwith %}
+              </td>
+            </tr>
+          {% endfor %}
+        </table>
+      </div>
+      <h2 class="section">Evaluators</h2>
+      {% if evaluators %}
+        <div class="table-scroll">
+          <table class="builds">
+            <caption class="visually-hidden">evaluation hosts</caption>
+            <thead>
+              <tr>
+                <th scope="col">host</th>
+                <th scope="col">jobs in the evaluations below</th>
+              </tr>
+            </thead>
+            {% for e in evaluators %}
+              <tr>
+                <td>
+                  <code>{{ e.host }}</code>
+                </td>
+                <td class="{{ 'muted' if not e.jobs }}">{{ e.jobs }}</td>
+              </tr>
+            {% endfor %}
+          </table>
+        </div>
+      {% else %}
+        <p class="muted">evaluations run on this host</p>
+      {% endif %}
+      <h2 class="section">Latest evaluations</h2>
+      <div class="table-scroll">
+        <table class="builds">
+          <caption class="visually-hidden">running and latest evaluations</caption>
+          <thead>
+            <tr>
+              <th scope="col">#</th>
+              <th scope="col">project</th>
+              <th scope="col">when</th>
+              <th scope="col">took</th>
+              <th scope="col">jobs per host</th>
+            </tr>
+          </thead>
+          {% for e in evals %}
+            <tr>
+              <td>
+                {{ status_icon(e.status) }}<a href="{{ build_path(e, e.number) }}">#{{ e.number }}</a>
+              </td>
+              <td>{{ repo_name(e.owner, e.name) }}</td>
+              <td>{{ ago(e.created_at) }}</td>
+              <td>
+                {% if e.eval_duration_ms is not none %}
+                  {{ (e.eval_duration_ms / 1000) | duration_secs }}
+                {% else %}
+                  <span class="muted">evaluating</span>
+                {% endif %}
+              </td>
+              <td class="muted">
+                {% for host, jobs in e.hosts %}{{ host }} {{ jobs }}{{ ", " if not loop.last }}{% else %}–{% endfor %}
+              </td>
+            </tr>
+          {% else %}
+            <tr>
+              <td colspan="5" class="muted">no evaluations yet</td>
+            </tr>
+          {% endfor %}
+        </table>
+      </div>
+    </section>
+  </main>
+{% endblock body %}
